@@ -11,7 +11,6 @@ import os
 from pathlib import Path
 
 from app.config import settings
-from app.models.database import init_db, get_engine, create_session, PullRequestReview, ReviewComment, ReviewStatus
 from app.models.schemas import (
     PRReviewRequest,
     ManualDiffReviewRequest,
@@ -21,6 +20,13 @@ from app.models.schemas import (
     ReviewSummary
 )
 from app.orchestrator import create_orchestrator
+
+# Check if we're in serverless environment (Vercel)
+IS_SERVERLESS = os.environ.get('VERCEL', False) or os.environ.get('AWS_LAMBDA_FUNCTION_NAME', False)
+
+# Only import database if not serverless
+if not IS_SERVERLESS:
+    from app.models.database import init_db, get_engine, create_session, PullRequestReview, ReviewComment, ReviewStatus
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -49,12 +55,16 @@ SessionLocal = None
 async def startup_event():
     """Initialize database on startup"""
     global engine, SessionLocal
-    engine = init_db(settings.database_url)
-    SessionLocal = create_session(engine)
+    if not IS_SERVERLESS:
+        engine = init_db(settings.database_url)
+        SessionLocal = create_session(engine)
 
 
 def get_db():
     """Database session dependency"""
+    if IS_SERVERLESS or SessionLocal is None:
+        yield None
+        return
     db = SessionLocal()
     try:
         yield db
@@ -67,17 +77,19 @@ def get_db():
 async def health_check():
     """Check system health status"""
     db_connected = False
-    try:
-        from sqlalchemy import text
-        db = SessionLocal()
-        db.execute(text("SELECT 1"))
-        db_connected = True
-        db.close()
-    except:
-        pass
+    
+    if not IS_SERVERLESS and SessionLocal:
+        try:
+            from sqlalchemy import text
+            db = SessionLocal()
+            db.execute(text("SELECT 1"))
+            db_connected = True
+            db.close()
+        except:
+            pass
     
     return HealthCheckResponse(
-        status="healthy" if db_connected else "degraded",
+        status="healthy",
         version="1.0.0",
         timestamp=datetime.utcnow(),
         database_connected=db_connected,
@@ -125,16 +137,22 @@ async def review_github_pr(
             github_token=github_token
         )
         
-        # Create DB record
-        review_record = PullRequestReview(
-            repo_owner=request.repo_owner,
-            repo_name=request.repo_name,
-            pr_number=request.pr_number,
-            status=ReviewStatus.IN_PROGRESS.value
-        )
-        db.add(review_record)
-        db.commit()
-        db.refresh(review_record)
+        review_record = None
+        review_id = None
+        
+        # Create DB record only if database is available
+        if db and not IS_SERVERLESS:
+            from app.models.database import PullRequestReview, ReviewComment, ReviewStatus
+            review_record = PullRequestReview(
+                repo_owner=request.repo_owner,
+                repo_name=request.repo_name,
+                pr_number=request.pr_number,
+                status=ReviewStatus.IN_PROGRESS.value
+            )
+            db.add(review_record)
+            db.commit()
+            db.refresh(review_record)
+            review_id = review_record.id
         
         # Run the review
         result = orchestrator.review_github_pr(
@@ -144,44 +162,49 @@ async def review_github_pr(
             post_comments=post_to_github
         )
         
-        # Update DB record with PR info
+        # Update DB record with PR info if available
+        if review_record and db:
+            from app.models.database import ReviewComment, ReviewStatus
+            pr_info = result.get("pr_info", {})
+            review_record.pr_title = pr_info.get("title")
+            review_record.pr_author = pr_info.get("author")
+            review_record.pr_url = pr_info.get("url")
+            review_record.total_files_changed = result.get("files_reviewed", 0)
+            review_record.total_additions = result.get("total_additions", 0)
+            review_record.total_deletions = result.get("total_deletions", 0)
+            review_record.status = ReviewStatus.COMPLETED.value
+            review_record.completed_at = datetime.utcnow()
+            
+            # Save summary
+            summary = result.get("summary", {})
+            review_record.overall_summary = f"Found {summary.get('total_issues', 0)} issues. Rating: {summary.get('overall_rating', 'unknown')}"
+            
+            # Save comments
+            for finding in result.get("findings", []):
+                comment = ReviewComment(
+                    review_id=review_record.id,
+                    file_path=finding.get("file_path", "unknown"),
+                    line_number=finding.get("line_number"),
+                    line_range_start=finding.get("line_range_start"),
+                    line_range_end=finding.get("line_range_end"),
+                    category=finding.get("category", "code_quality"),
+                    severity=finding.get("severity", "medium"),
+                    title=finding.get("title", "Issue"),
+                    description=finding.get("description", ""),
+                    original_code=finding.get("original_code"),
+                    suggested_code=finding.get("suggested_code"),
+                    agent_name=finding.get("agent_name")
+                )
+                db.add(comment)
+            
+            db.commit()
+        
         pr_info = result.get("pr_info", {})
-        review_record.pr_title = pr_info.get("title")
-        review_record.pr_author = pr_info.get("author")
-        review_record.pr_url = pr_info.get("url")
-        review_record.total_files_changed = result.get("files_reviewed", 0)
-        review_record.total_additions = result.get("total_additions", 0)
-        review_record.total_deletions = result.get("total_deletions", 0)
-        review_record.status = ReviewStatus.COMPLETED.value
-        review_record.completed_at = datetime.utcnow()
-        
-        # Save summary
         summary = result.get("summary", {})
-        review_record.overall_summary = f"Found {summary.get('total_issues', 0)} issues. Rating: {summary.get('overall_rating', 'unknown')}"
-        
-        # Save comments
-        for finding in result.get("findings", []):
-            comment = ReviewComment(
-                review_id=review_record.id,
-                file_path=finding.get("file_path", "unknown"),
-                line_number=finding.get("line_number"),
-                line_range_start=finding.get("line_range_start"),
-                line_range_end=finding.get("line_range_end"),
-                category=finding.get("category", "code_quality"),
-                severity=finding.get("severity", "medium"),
-                title=finding.get("title", "Issue"),
-                description=finding.get("description", ""),
-                original_code=finding.get("original_code"),
-                suggested_code=finding.get("suggested_code"),
-                agent_name=finding.get("agent_name")
-            )
-            db.add(comment)
-        
-        db.commit()
         
         return {
             "success": True,
-            "review_id": review_record.id,
+            "review_id": review_id,
             "pr_info": pr_info,
             "files_reviewed": result.get("files_reviewed", 0),
             "summary": summary,
@@ -192,7 +215,8 @@ async def review_github_pr(
         
     except Exception as e:
         # Update status to failed
-        if 'review_record' in locals():
+        if review_record and db:
+            from app.models.database import ReviewStatus
             review_record.status = ReviewStatus.FAILED.value
             db.commit()
         
@@ -226,55 +250,65 @@ async def review_diff(
             github_token=None
         )
         
-        # Create DB record
-        review_record = PullRequestReview(
-            repo_owner="manual",
-            repo_name="diff",
-            pr_number=0,
-            status=ReviewStatus.IN_PROGRESS.value,
-            diff_content=request.diff_content
-        )
-        db.add(review_record)
-        db.commit()
-        db.refresh(review_record)
+        review_record = None
+        review_id = None
+        
+        # Create DB record only if database is available
+        if db and not IS_SERVERLESS:
+            from app.models.database import PullRequestReview, ReviewComment, ReviewStatus
+            review_record = PullRequestReview(
+                repo_owner="manual",
+                repo_name="diff",
+                pr_number=0,
+                status=ReviewStatus.IN_PROGRESS.value,
+                diff_content=request.diff_content
+            )
+            db.add(review_record)
+            db.commit()
+            db.refresh(review_record)
+            review_id = review_record.id
         
         # Run the review
         result = orchestrator.review_diff(request.diff_content)
         
-        # Update DB record
-        review_record.total_files_changed = result.get("files_reviewed", 0)
-        review_record.total_additions = result.get("total_additions", 0)
-        review_record.total_deletions = result.get("total_deletions", 0)
-        review_record.status = ReviewStatus.COMPLETED.value
-        review_record.completed_at = datetime.utcnow()
+        # Update DB record if available
+        if review_record and db:
+            from app.models.database import ReviewComment, ReviewStatus
+            review_record.total_files_changed = result.get("files_reviewed", 0)
+            review_record.total_additions = result.get("total_additions", 0)
+            review_record.total_deletions = result.get("total_deletions", 0)
+            review_record.status = ReviewStatus.COMPLETED.value
+            review_record.completed_at = datetime.utcnow()
+            
+            # Save summary
+            summary = result.get("summary", {})
+            review_record.overall_summary = f"Found {summary.get('total_issues', 0)} issues. Rating: {summary.get('overall_rating', 'unknown')}"
+            
+            # Save comments
+            for finding in result.get("findings", []):
+                comment = ReviewComment(
+                    review_id=review_record.id,
+                    file_path=finding.get("file_path", "unknown"),
+                    line_number=finding.get("line_number"),
+                    line_range_start=finding.get("line_range_start"),
+                    line_range_end=finding.get("line_range_end"),
+                    category=finding.get("category", "code_quality"),
+                    severity=finding.get("severity", "medium"),
+                    title=finding.get("title", "Issue"),
+                    description=finding.get("description", ""),
+                    original_code=finding.get("original_code"),
+                    suggested_code=finding.get("suggested_code"),
+                    agent_name=finding.get("agent_name")
+                )
+                db.add(comment)
+            
+            db.commit()
         
-        # Save summary
         summary = result.get("summary", {})
-        review_record.overall_summary = f"Found {summary.get('total_issues', 0)} issues. Rating: {summary.get('overall_rating', 'unknown')}"
-        
-        # Save comments
-        for finding in result.get("findings", []):
-            comment = ReviewComment(
-                review_id=review_record.id,
-                file_path=finding.get("file_path", "unknown"),
-                line_number=finding.get("line_number"),
-                line_range_start=finding.get("line_range_start"),
-                line_range_end=finding.get("line_range_end"),
-                category=finding.get("category", "code_quality"),
-                severity=finding.get("severity", "medium"),
-                title=finding.get("title", "Issue"),
-                description=finding.get("description", ""),
-                original_code=finding.get("original_code"),
-                suggested_code=finding.get("suggested_code"),
-                agent_name=finding.get("agent_name")
-            )
-            db.add(comment)
-        
-        db.commit()
         
         return {
             "success": True,
-            "review_id": review_record.id,
+            "review_id": review_id,
             "files_reviewed": result.get("files_reviewed", 0),
             "summary": summary,
             "findings": result.get("findings", []),
@@ -282,7 +316,8 @@ async def review_diff(
         }
         
     except Exception as e:
-        if 'review_record' in locals():
+        if review_record and db:
+            from app.models.database import ReviewStatus
             review_record.status = ReviewStatus.FAILED.value
             db.commit()
         
@@ -293,6 +328,10 @@ async def review_diff(
 @app.get("/api/review/{review_id}", tags=["Review"])
 async def get_review(review_id: int, db=Depends(get_db)):
     """Get a specific review by ID"""
+    if IS_SERVERLESS or not db:
+        raise HTTPException(status_code=501, detail="Database not available in serverless mode")
+    
+    from app.models.database import PullRequestReview, ReviewComment
     review = db.query(PullRequestReview).filter(PullRequestReview.id == review_id).first()
     
     if not review:
@@ -341,6 +380,10 @@ async def list_reviews(
     db=Depends(get_db)
 ):
     """List all reviews with pagination"""
+    if IS_SERVERLESS or not db:
+        return {"total": 0, "skip": skip, "limit": limit, "reviews": [], "message": "History not available in serverless mode"}
+    
+    from app.models.database import PullRequestReview
     total = db.query(PullRequestReview).count()
     reviews = db.query(PullRequestReview).order_by(
         PullRequestReview.started_at.desc()
@@ -371,6 +414,10 @@ async def list_reviews(
 @app.delete("/api/review/{review_id}", tags=["Review"])
 async def delete_review(review_id: int, db=Depends(get_db)):
     """Delete a review by ID"""
+    if IS_SERVERLESS or not db:
+        raise HTTPException(status_code=501, detail="Database not available in serverless mode")
+    
+    from app.models.database import PullRequestReview
     review = db.query(PullRequestReview).filter(PullRequestReview.id == review_id).first()
     
     if not review:

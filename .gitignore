@@ -108,3 +108,4 @@ nohup.out
 
 # Vercel
 .vercel
+.env*.local
