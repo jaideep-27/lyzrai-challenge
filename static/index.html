@@ -107,6 +107,49 @@
         .status-dot.connected { background: var(--success); }
         .status-dot.disconnected { background: var(--danger); }
         
+        .info-icon {
+            display: none;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--text-secondary);
+            color: var(--bg);
+            font-size: 8px;
+            font-weight: 700;
+            cursor: help;
+            position: relative;
+            align-items: center;
+            justify-content: center;
+            margin-left: 2px;
+        }
+        
+        .info-icon.visible {
+            display: inline-flex;
+        }
+        
+        .info-icon:hover::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            padding: 0.5rem 0.75rem;
+            border-radius: 6px;
+            font-size: 0.688rem;
+            font-weight: 400;
+            white-space: nowrap;
+            z-index: 100;
+            margin-bottom: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            max-width: 220px;
+            white-space: normal;
+            text-align: center;
+            line-height: 1.4;
+        }
+        
         .tabs {
             display: flex;
             gap: 2px;
@@ -504,6 +547,7 @@
             <div class="status-item">
                 <span class="status-dot" id="db-status"></span>
                 <span>Database</span>
+                <span class="info-icon" id="db-info" data-tooltip="Database is optional in serverless mode. Reviews work perfectly - history just won't persist between sessions.">i</span>
             </div>
         </div>
         
@@ -656,6 +700,8 @@
                 document.getElementById('db-status').className = `status-dot ${data.database_connected ? 'connected' : 'disconnected'}`;
                 document.getElementById('llm-status').className = `status-dot ${data.llm_configured ? 'connected' : 'disconnected'}`;
                 document.getElementById('github-status').className = `status-dot ${data.github_configured ? 'connected' : 'disconnected'}`;
+                // Show info icon if database is not connected
+                document.getElementById('db-info').className = `info-icon ${data.database_connected ? '' : 'visible'}`;
             } catch (e) {}
         }
         
