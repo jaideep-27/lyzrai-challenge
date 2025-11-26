@@ -109,45 +109,58 @@
         
         .info-icon {
             display: none;
-            width: 12px;
-            height: 12px;
+            width: 14px;
+            height: 14px;
             border-radius: 50%;
             background: var(--text-secondary);
-            color: var(--bg);
-            font-size: 8px;
+            color: var(--bg-card);
+            font-size: 9px;
             font-weight: 700;
+            font-style: normal;
             cursor: help;
             position: relative;
             align-items: center;
             justify-content: center;
-            margin-left: 2px;
+            margin-left: 4px;
+            flex-shrink: 0;
         }
         
         .info-icon.visible {
             display: inline-flex;
         }
         
-        .info-icon:hover::after {
-            content: attr(data-tooltip);
+        .tooltip {
+            display: none;
             position: absolute;
-            bottom: 100%;
+            bottom: calc(100% + 8px);
             left: 50%;
             transform: translateX(-50%);
             background: var(--bg-card);
             border: 1px solid var(--border);
-            color: var(--text-secondary);
-            padding: 0.5rem 0.75rem;
-            border-radius: 6px;
-            font-size: 0.688rem;
+            color: var(--text);
+            padding: 0.625rem 0.875rem;
+            border-radius: 8px;
+            font-size: 0.75rem;
             font-weight: 400;
-            white-space: nowrap;
-            z-index: 100;
-            margin-bottom: 6px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-            max-width: 220px;
-            white-space: normal;
+            z-index: 1000;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+            width: 240px;
             text-align: center;
-            line-height: 1.4;
+            line-height: 1.5;
+        }
+        
+        .info-icon:hover .tooltip {
+            display: block;
+        }
+        
+        .tooltip::after {
+            content: '';
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            border: 6px solid transparent;
+            border-top-color: var(--border);
         }
         
         .tabs {
@@ -547,7 +560,7 @@
             <div class="status-item">
                 <span class="status-dot" id="db-status"></span>
                 <span>Database</span>
-                <span class="info-icon" id="db-info" data-tooltip="Database is optional in serverless mode. Reviews work perfectly - history just won't persist between sessions.">i</span>
+                <span class="info-icon" id="db-info">i<span class="tooltip">Database is optional in serverless mode. Reviews work perfectly — history just won't persist between sessions.</span></span>
             </div>
         </div>
         
@@ -586,13 +599,13 @@
                     <h3>Quick test with sample PRs</h3>
                     <div class="sample-list">
                         <button class="sample-btn" data-owner="octocat" data-repo="Hello-World" data-pr="2846">octocat/Hello-World #2846</button>
-                        <button class="sample-btn" data-owner="microsoft" data-repo="vscode" data-pr="199908">microsoft/vscode #199908</button>
+                        <button class="sample-btn" data-owner="octocat" data-repo="Spoon-Knife" data-pr="20817">octocat/Spoon-Knife #20817</button>
                         <button class="sample-btn" data-owner="facebook" data-repo="react" data-pr="31715">facebook/react #31715</button>
                         <button class="sample-btn" data-owner="vercel" data-repo="next.js" data-pr="73082">vercel/next.js #73082</button>
                         <button class="sample-btn" data-owner="tailwindlabs" data-repo="tailwindcss" data-pr="15166">tailwindcss #15166</button>
                         <button class="sample-btn" data-owner="nodejs" data-repo="node" data-pr="56096">nodejs/node #56096</button>
                         <button class="sample-btn" data-owner="expressjs" data-repo="express" data-pr="6118">express #6118</button>
-                        <button class="sample-btn" data-owner="django" data-repo="django" data-pr="18925">django #18925</button>
+                        <button class="sample-btn" data-owner="pallets" data-repo="flask" data-pr="5600">pallets/flask #5600</button>
                     </div>
                 </div>
             </div>
